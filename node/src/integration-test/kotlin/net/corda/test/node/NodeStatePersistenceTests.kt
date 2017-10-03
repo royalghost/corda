@@ -38,8 +38,7 @@ class NodeStatePersistenceTests {
         val user = User("mark", "dadada", setOf(FlowPermissions.startFlowPermission<SendMessageFlow>()))
         val message = Message("Hello world!")
         driver(isDebug = true, startNodesInProcess = isQuasarAgentSpecified()) {
-
-            startNode(providedName = DUMMY_NOTARY.name, advertisedServices = setOf(ServiceInfo(SimpleNotaryService.type))).getOrThrow()
+            startNotaryNode(DUMMY_NOTARY.name).getOrThrow()
             var nodeHandle = startNode(rpcUsers = listOf(user)).getOrThrow()
             val nodeName = nodeHandle.nodeInfo.chooseIdentity().name
             nodeHandle.rpcClientToNode().start(user.username, user.password).use {

@@ -9,8 +9,6 @@ import net.corda.finance.contracts.getCashBalances
 import net.corda.finance.flows.CashIssueFlow
 import net.corda.finance.schemas.CashSchemaV1
 import net.corda.node.internal.StartedNode
-import net.corda.node.services.transactions.ValidatingNotaryService
-import net.corda.nodeapi.internal.ServiceInfo
 import net.corda.testing.*
 import net.corda.testing.node.MockNetwork
 import org.junit.After
@@ -31,11 +29,7 @@ class CustomVaultQueryTest {
     fun setup() {
         setCordappPackages("net.corda.finance.contracts.asset")
         mockNet = MockNetwork(threadPerNode = true)
-        val notaryService = ServiceInfo(ValidatingNotaryService.type)
-        notaryNode = mockNet.createNode(
-                legalName = DUMMY_NOTARY.name,
-                overrideServices = mapOf(notaryService to DUMMY_NOTARY_KEY),
-                advertisedServices = *arrayOf(notaryService))
+        notaryNode = mockNet.createNotaryNode(legalName = DUMMY_NOTARY.name)
         nodeA = mockNet.createPartyNode(notaryNode.network.myAddress)
         nodeB = mockNet.createPartyNode(notaryNode.network.myAddress)
 

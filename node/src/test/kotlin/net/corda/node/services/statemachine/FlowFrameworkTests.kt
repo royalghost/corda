@@ -6,10 +6,8 @@ import co.paralleluniverse.strands.concurrent.Semaphore
 import net.corda.core.concurrent.CordaFuture
 import net.corda.core.contracts.ContractState
 import net.corda.core.contracts.StateAndRef
-import net.corda.core.crypto.generateKeyPair
 import net.corda.core.crypto.random63BitValue
 import net.corda.core.flows.*
-import net.corda.core.identity.CordaX500Name
 import net.corda.core.identity.Party
 import net.corda.core.internal.concurrent.flatMap
 import net.corda.core.internal.concurrent.map
@@ -32,8 +30,6 @@ import net.corda.finance.flows.CashPaymentFlow
 import net.corda.node.internal.InitiatedFlowFactory
 import net.corda.node.internal.StartedNode
 import net.corda.node.services.persistence.checkpoints
-import net.corda.node.services.transactions.ValidatingNotaryService
-import net.corda.nodeapi.internal.ServiceInfo
 import net.corda.testing.*
 import net.corda.testing.contracts.DummyContract
 import net.corda.testing.contracts.DummyState
@@ -85,13 +81,10 @@ class FlowFrameworkTests {
         node1.internals.ensureRegistered()
 
         // We intentionally create our own notary and ignore the one provided by the network
-        val notaryKeyPair = generateKeyPair()
-        val notaryService = ServiceInfo(ValidatingNotaryService.type, CordaX500Name(commonName = ValidatingNotaryService.type.id, organisation = "Notary service 2000", locality = "London", country = "GB"))
-        val overrideServices = mapOf(Pair(notaryService, notaryKeyPair))
         // Note that these notaries don't operate correctly as they don't share their state. They are only used for testing
         // service addressing.
-        notary1 = mockNet.createNotaryNode(networkMapAddress = node1.network.myAddress, overrideServices = overrideServices, serviceName = notaryService.name)
-        notary2 = mockNet.createNotaryNode(networkMapAddress = node1.network.myAddress, overrideServices = overrideServices, serviceName = notaryService.name)
+        notary1 = mockNet.createNotaryNode(networkMapAddress = node1.network.myAddress)
+        notary2 = mockNet.createNotaryNode(networkMapAddress = node1.network.myAddress)
 
         receivedSessionMessagesObservable().forEach { receivedSessionMessages += it }
         mockNet.runNetwork()

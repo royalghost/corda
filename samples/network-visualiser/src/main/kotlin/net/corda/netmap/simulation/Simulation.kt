@@ -103,7 +103,7 @@ abstract class Simulation(val networkSendManuallyPumped: Boolean,
         override fun create(config: NodeConfiguration, network: MockNetwork, networkMapAddr: SingleMessageRecipient?,
                             advertisedServices: Set<ServiceInfo>, id: Int, overrideServices: Map<ServiceInfo, KeyPair>?,
                             entropyRoot: BigInteger): SimulatedNode {
-            require(advertisedServices.containsType(SimpleNotaryService.type))
+            require(!config.notary!!.validating)
             val cfg = testNodeConfiguration(
                     baseDirectory = config.baseDirectory,
                     myLegalName = DUMMY_NOTARY.name)
@@ -153,7 +153,7 @@ abstract class Simulation(val networkSendManuallyPumped: Boolean,
     val mockNet = MockNetwork(networkSendManuallyPumped, runAsync)
     // This one must come first.
     val networkMap = mockNet.createNode(nodeFactory = NetworkMapNodeFactory)
-    val notary = mockNet.createNode(networkMap.network.myAddress, nodeFactory = NotaryNodeFactory, advertisedServices = ServiceInfo(SimpleNotaryService.type))
+    val notary = mockNet.createNotaryNode(networkMap.network.myAddress, nodeFactory = NotaryNodeFactory)
     val regulators = listOf(mockNet.createUnstartedNode(networkMap.network.myAddress, nodeFactory = RegulatorFactory))
     val ratesOracle = mockNet.createUnstartedNode(networkMap.network.myAddress, nodeFactory = RatesOracleFactory)
 

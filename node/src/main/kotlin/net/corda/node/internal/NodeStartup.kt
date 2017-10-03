@@ -165,7 +165,7 @@ open class NodeStartup(val args: Array<String>) {
     }
 
     open protected fun banJavaSerialisation(conf: FullNodeConfiguration) {
-        SerialFilter.install(if (conf.bftSMaRt.isValid()) ::bftSMaRtSerialFilter else ::defaultSerialFilter)
+        SerialFilter.install(if (conf.notary?.bftSMaRt != null) ::bftSMaRtSerialFilter else ::defaultSerialFilter)
     }
 
     open protected fun getVersionInfo(): VersionInfo {

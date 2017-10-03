@@ -18,7 +18,6 @@ import net.corda.core.messaging.SingleMessageRecipient
 import net.corda.core.node.services.IdentityService
 import net.corda.core.node.services.KeyManagementService
 import net.corda.core.node.services.NetworkMapCache
-import net.corda.core.node.services.NotaryService
 import net.corda.core.serialization.SerializationWhitelist
 import net.corda.core.utilities.NetworkHostAndPort
 import net.corda.core.utilities.getOrThrow
@@ -27,7 +26,9 @@ import net.corda.finance.utils.WorldMapLocation
 import net.corda.node.internal.AbstractNode
 import net.corda.node.internal.StartedNode
 import net.corda.node.services.api.SchemaService
+import net.corda.node.services.config.BFTSMaRtConfiguration
 import net.corda.node.services.config.NodeConfiguration
+import net.corda.node.services.config.NotaryConfig
 import net.corda.node.services.identity.PersistentIdentityService
 import net.corda.node.services.keys.E2ETestKeyManagementService
 import net.corda.node.services.messaging.MessagingService
@@ -36,12 +37,10 @@ import net.corda.node.services.network.NetworkMapService
 import net.corda.node.services.transactions.BFTNonValidatingNotaryService
 import net.corda.node.services.transactions.BFTSMaRt
 import net.corda.node.services.transactions.InMemoryTransactionVerifierService
-import net.corda.node.services.transactions.ValidatingNotaryService
 import net.corda.node.utilities.AffinityExecutor
 import net.corda.node.utilities.AffinityExecutor.ServiceAffinityExecutor
 import net.corda.node.utilities.CertificateAndKeyPair
 import net.corda.nodeapi.internal.ServiceInfo
-import net.corda.nodeapi.internal.ServiceType
 import net.corda.testing.*
 import net.corda.testing.node.MockServices.Companion.makeTestDataSourceProperties
 import org.apache.activemq.artemis.utils.ReusableLatch
@@ -49,6 +48,7 @@ import org.slf4j.Logger
 import java.math.BigInteger
 import java.nio.file.Path
 import java.security.KeyPair
+import java.security.PublicKey
 import java.security.cert.X509Certificate
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
@@ -268,12 +268,11 @@ class MockNetwork(private val networkSendManuallyPumped: Boolean = false,
 
         override fun acceptableLiveFiberCountOnStop(): Int = acceptableLiveFiberCountOnStop
 
-        override fun makeCoreNotaryService(type: ServiceType): NotaryService? {
-            if (type != BFTNonValidatingNotaryService.type) return super.makeCoreNotaryService(type)
-            return BFTNonValidatingNotaryService(services, myNotaryIdentity!!.owningKey, object : BFTSMaRt.Cluster {
+        override fun makeBFTCluster(notaryKey: PublicKey, bftSMaRtConfig: BFTSMaRtConfiguration): BFTSMaRt.Cluster {
+            return object : BFTSMaRt.Cluster {
                 override fun waitUntilAllReplicasHaveInitialized() {
-                    val clusterNodes = mockNet.nodes.filter { myNotaryIdentity!!.owningKey in it.started!!.info.legalIdentities.map { it.owningKey } }
-                    if (clusterNodes.size != configuration.notaryClusterAddresses.size) {
+                    val clusterNodes = mockNet.nodes.filter { notaryKey in it.started!!.info.legalIdentities.map { it.owningKey } }
+                    if (clusterNodes.size != bftSMaRtConfig.clusterAddresses.size) {
                         throw IllegalStateException("Unable to enumerate all nodes in BFT cluster.")
                     }
                     clusterNodes.forEach {
@@ -281,7 +280,7 @@ class MockNetwork(private val networkSendManuallyPumped: Boolean = false,
                         notaryService.waitUntilReplicaHasInitialized()
                     }
                 }
-            })
+            }
         }
 
         /**
@@ -392,21 +391,31 @@ class MockNetwork(private val networkSendManuallyPumped: Boolean = false,
     }
 
     /**
-     * Construct a default notary node.
+     * Construct a validating notary node wbich is also the network map.
      */
-    fun createNotaryNode() = createNotaryNode(null, DUMMY_NOTARY.name, null, null)
+    fun createNotaryNode(): StartedNode<MockNode> = createNotaryNode(null, DUMMY_NOTARY.name)
 
     fun createNotaryNode(networkMapAddress: SingleMessageRecipient? = null,
                          legalName: CordaX500Name? = null,
-                         overrideServices: Map<ServiceInfo, KeyPair>? = null,
-                         serviceName: CordaX500Name? = null): StartedNode<MockNode> {
-        return createNode(networkMapAddress, legalName = legalName, overrideServices = overrideServices,
-                advertisedServices = *arrayOf(ServiceInfo(ValidatingNotaryService.type, serviceName)))
+                         validating: Boolean = true): StartedNode<MockNode> {
+        return createNode(networkMapAddress, legalName = legalName, configOverrides = {
+            whenever(it.notary).thenReturn(NotaryConfig(validating))
+        })
+    }
+
+    fun <N : MockNode> createNotaryNode(networkMapAddress: SingleMessageRecipient? = null,
+                                        legalName: CordaX500Name? = null,
+                                        validating: Boolean = true,
+                                        nodeFactory: Factory<N>): StartedNode<N> {
+        return createNode(networkMapAddress, legalName = legalName, nodeFactory = nodeFactory, configOverrides = {
+            whenever(it.notary).thenReturn(NotaryConfig(validating))
+        })
     }
 
     // Convenience method for Java
-    fun createPartyNode(networkMapAddress: SingleMessageRecipient,
-                        legalName: CordaX500Name) = createPartyNode(networkMapAddress, legalName, null)
+    fun createPartyNode(networkMapAddress: SingleMessageRecipient, legalName: CordaX500Name): StartedNode<MockNode> {
+        return createPartyNode(networkMapAddress, legalName, null)
+    }
 
     fun createPartyNode(networkMapAddress: SingleMessageRecipient,
                         legalName: CordaX500Name? = null,

@@ -1,11 +1,11 @@
 package net.corda.node.services.network
 
 import net.corda.core.concurrent.CordaFuture
-import net.corda.core.internal.bufferUntilSubscribed
 import net.corda.core.identity.AbstractParty
 import net.corda.core.identity.CordaX500Name
 import net.corda.core.identity.Party
 import net.corda.core.internal.VisibleForTesting
+import net.corda.core.internal.bufferUntilSubscribed
 import net.corda.core.internal.concurrent.map
 import net.corda.core.internal.concurrent.openFuture
 import net.corda.core.messaging.DataFeed
@@ -24,6 +24,7 @@ import net.corda.core.utilities.toBase58String
 import net.corda.node.services.api.NetworkCacheException
 import net.corda.node.services.api.NetworkMapCacheInternal
 import net.corda.node.services.api.ServiceHubInternal
+import net.corda.node.services.config.NotaryConfig
 import net.corda.node.services.messaging.MessagingService
 import net.corda.node.services.messaging.createMessage
 import net.corda.node.services.messaging.sendRequest
@@ -80,10 +81,8 @@ open class PersistentNetworkMapCache(private val serviceHub: ServiceHubInternal)
                         //       Notary certificates have to be signed by the doorman directly
                         it.legalIdentities
                     }
-                    .filter {
-                        it.name.toString().contains("corda.notary", true)
-                    }
-                    .distinct() // Distinct, because of distributed service nodes
+                    .filter { it.name.commonName?.startsWith(NotaryConfig.ID_PREFIX) ?: false }
+                    .toSet() // Distinct, because of distributed service nodes
                     .sortedBy { it.name.toString() }
         }
 

@@ -1,9 +1,7 @@
 package net.corda.cordform;
 
 import static java.util.Collections.emptyList;
-import com.typesafe.config.Config;
-import com.typesafe.config.ConfigFactory;
-import com.typesafe.config.ConfigValueFactory;
+import com.typesafe.config.*;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
@@ -30,11 +28,6 @@ public class CordformNode implements NodeDefinition {
      */
     public List<String> advertisedServices = emptyList();
 
-    /**
-     * If running a Raft notary cluster, the address of at least one node in the cluster, or leave blank to start a new cluster.
-     * If running a BFT notary cluster, the addresses of all nodes in the cluster.
-     */
-    public List<String> notaryClusterAddresses = emptyList();
     /**
      * Set the RPC users for this node. This configuration block allows arbitrary configuration.
      * The recommended current structure is:
@@ -79,19 +72,7 @@ public class CordformNode implements NodeDefinition {
         config = config.withValue("rpcAddress", ConfigValueFactory.fromAnyRef(DEFAULT_HOST + ':' + rpcPort));
     }
 
-    /**
-     * Set the port which to bind the Copycat (Raft) node to.
-     *
-     * @param notaryPort The Raft port.
-     */
-    public void notaryNodePort(Integer notaryPort) {
-        config = config.withValue("notaryNodeAddress", ConfigValueFactory.fromAnyRef(DEFAULT_HOST + ':' + notaryPort));
-    }
-
-    /**
-     * @param id The (0-based) BFT replica ID.
-     */
-    public void bftReplicaId(Integer id) {
-        config = config.withValue("bftSMaRt", ConfigValueFactory.fromMap(Collections.singletonMap("replicaId", id)));
+    public void notary(ConfigObject notaryConfig) {
+        config = config.withValue("notary", notaryConfig);
     }
 }

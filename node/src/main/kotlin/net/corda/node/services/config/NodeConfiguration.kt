@@ -6,16 +6,10 @@ import net.corda.node.internal.NetworkMapInfo
 import net.corda.node.services.messaging.CertificateChainCheckPolicy
 import net.corda.nodeapi.User
 import net.corda.nodeapi.config.NodeSSLConfiguration
-import net.corda.nodeapi.config.OldConfig
 import net.corda.nodeapi.internal.ServiceInfo
 import java.net.URL
 import java.nio.file.Path
 import java.util.*
-
-/** @param exposeRaces for testing only, so its default is not in reference.conf but here. */
-data class BFTSMaRtConfiguration(val replicaId: Int, val debug: Boolean, val exposeRaces: Boolean = false) {
-    fun isValid() = replicaId >= 0
-}
 
 interface NodeConfiguration : NodeSSLConfiguration {
     // myLegalName should be only used in the initial network registration, we should use the name from the certificate instead of this.
@@ -37,17 +31,45 @@ interface NodeConfiguration : NodeSSLConfiguration {
     val certificateChainCheckPolicies: List<CertChainPolicyConfig>
     val verifierType: VerifierType
     val messageRedeliveryDelaySeconds: Int
-    val bftSMaRt: BFTSMaRtConfiguration
-    val notaryNodeAddress: NetworkHostAndPort?
-    val notaryClusterAddresses: List<NetworkHostAndPort>
+    val notary: NotaryConfig?
     val activeMQServer: ActiveMqServerConfiguration
 }
 
-data class BridgeConfiguration(
-        val retryIntervalMs: Long,
-        val maxRetryIntervalMin: Long,
-        val retryIntervalMultiplier: Double
-)
+data class NotaryConfig(val validating: Boolean, val raft: RaftConfig? = null, val bftSMaRt: BFTSMaRtConfiguration? = null) {
+    companion object {
+        //TODO These two perhaps belong somewhere else
+        const val ID_PREFIX = "corda.notary."
+        fun buildServiceId(validating: Boolean, raft: Boolean = false, bft: Boolean = false): String {
+            require(!raft || !bft)
+            return StringBuffer(ID_PREFIX).apply {
+                append(if (validating) "validating" else "simple")
+                if (raft) append(".raft")
+                if (bft) append(".bft")
+            }.toString()
+        }
+    }
+
+    init {
+        require(raft == null || bftSMaRt == null) { "raft and bftSMaRt configs cannot be specified together" }
+    }
+    val serviceId: String get() = buildServiceId(validating, raft != null, bftSMaRt != null)
+}
+
+data class RaftConfig(val nodeAddress: NetworkHostAndPort, val clusterAddresses: List<NetworkHostAndPort>)
+
+/** @param exposeRaces for testing only, so its default is not in reference.conf but here. */
+data class BFTSMaRtConfiguration(val clusterAddresses: List<NetworkHostAndPort>,
+                                 val replicaId: Int,
+                                 val debug: Boolean,
+                                 val exposeRaces: Boolean = false) {
+    init {
+        require(replicaId >= 0) { "replicaId cannot be negative" }
+    }
+}
+
+data class BridgeConfiguration(val retryIntervalMs: Long,
+                               val maxRetryIntervalMin: Long,
+                               val retryIntervalMultiplier: Double)
 
 data class ActiveMqServerConfiguration(val bridge: BridgeConfiguration)
 
@@ -67,16 +89,13 @@ data class FullNodeConfiguration(
         override val verifierType: VerifierType,
         override val messageRedeliveryDelaySeconds: Int = 30,
         val useHTTPS: Boolean,
-        @OldConfig("artemisAddress")
         val p2pAddress: NetworkHostAndPort,
         val rpcAddress: NetworkHostAndPort?,
         // TODO This field is slightly redundant as p2pAddress is sufficient to hold the address of the node's MQ broker.
         // Instead this should be a Boolean indicating whether that broker is an internal one started by the node or an external one
         val messagingServerAddress: NetworkHostAndPort?,
         val extraAdvertisedServiceIds: List<String>,
-        override val bftSMaRt: BFTSMaRtConfiguration,
-        override val notaryNodeAddress: NetworkHostAndPort?,
-        override val notaryClusterAddresses: List<NetworkHostAndPort>,
+        override val notary: NotaryConfig?,
         override val certificateChainCheckPolicies: List<CertChainPolicyConfig>,
         override val devMode: Boolean = false,
         val useTestClock: Boolean = false,

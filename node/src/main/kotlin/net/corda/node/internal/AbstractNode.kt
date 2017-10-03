@@ -1,7 +1,6 @@
 package net.corda.node.internal
 
 import com.codahale.metrics.MetricRegistry
-import com.google.common.collect.Lists
 import com.google.common.collect.MutableClassToInstanceMap
 import com.google.common.util.concurrent.MoreExecutors
 import net.corda.confidential.SwapIdentitiesFlow
@@ -41,7 +40,9 @@ import net.corda.node.services.ContractUpgradeHandler
 import net.corda.node.services.FinalityHandler
 import net.corda.node.services.NotaryChangeHandler
 import net.corda.node.services.api.*
+import net.corda.node.services.config.BFTSMaRtConfiguration
 import net.corda.node.services.config.NodeConfiguration
+import net.corda.node.services.config.NotaryConfig
 import net.corda.node.services.config.configureWithDevSSLCertificate
 import net.corda.node.services.events.NodeSchedulerService
 import net.corda.node.services.events.ScheduledActivityObserver
@@ -66,7 +67,6 @@ import net.corda.node.services.vault.VaultSoftLockManager
 import net.corda.node.utilities.*
 import net.corda.node.utilities.AddOrRemove.ADD
 import net.corda.nodeapi.internal.ServiceInfo
-import net.corda.nodeapi.internal.ServiceType
 import org.apache.activemq.artemis.utils.ReusableLatch
 import org.slf4j.Logger
 import rx.Observable
@@ -399,7 +399,7 @@ abstract class AbstractNode(open val configuration: NodeConfiguration,
         _services = ServiceHubInternalImpl(schemaService)
         attachments = NodeAttachmentService(services.monitoringService.metrics)
         cordappProvider.start(attachments)
-        legalIdentity = obtainIdentity()
+        legalIdentity = obtainIdentity("identity", myLegalName)
         network = makeMessagingService(legalIdentity)
         info = makeInfo(legalIdentity)
 
@@ -449,13 +449,7 @@ abstract class AbstractNode(open val configuration: NodeConfiguration,
      * Used only for notary identities.
      */
     protected open fun getNotaryIdentity(): PartyAndCertificate? {
-        return advertisedServices.singleOrNull { it.type.isNotary() }?.let {
-            it.name?.let {
-                require(it.commonName != null) {"Common name in '$it' must not be null for notary service, use service type id as common name."}
-                require(ServiceType.parse(it.commonName!!).isNotary()) {"Common name for notary service in '$it' must be the notary service type id."}
-            }
-            obtainIdentity(it)
-        }
+        return configuration.notary?.serviceId?.let { obtainIdentity(it, myLegalName.copy(commonName = it)) }
     }
 
     @VisibleForTesting
@@ -502,22 +496,13 @@ abstract class AbstractNode(open val configuration: NodeConfiguration,
     }
 
     private fun makeNetworkServices(tokenizableServices: MutableList<Any>) {
-        val serviceTypes = advertisedServices.map { it.type }
         inNodeNetworkMapService = if (configuration.networkMapService == null) makeNetworkMapService() else NullNetworkMapService
-        val notaryServiceType = serviceTypes.singleOrNull { it.isNotary() }
-        if (notaryServiceType != null) {
-            val service = makeCoreNotaryService(notaryServiceType)
-            if (service != null) {
-                service.apply {
-                    tokenizableServices.add(this)
-                    runOnStop += this::stop
-                    start()
-                }
-                installCoreFlow(NotaryFlow.Client::class, service::createServiceFlow)
-            } else {
-                log.info("Notary type ${notaryServiceType.id} does not match any built-in notary types. " +
-                        "It is expected to be loaded via a CorDapp")
-            }
+        configuration.notary?.let {
+            val notaryService = makeCoreNotaryService(it)
+            tokenizableServices.add(notaryService)
+            runOnStop += notaryService::stop
+            installCoreFlow(NotaryFlow.Client::class, notaryService::createServiceFlow)
+            notaryService.start()
         }
     }
 
@@ -586,15 +571,33 @@ abstract class AbstractNode(open val configuration: NodeConfiguration,
         return PersistentNetworkMapService(services, configuration.minimumPlatformVersion)
     }
 
-    open protected fun makeCoreNotaryService(type: ServiceType): NotaryService? {
-        check(myNotaryIdentity != null) { "No notary identity initialized when creating a notary service" }
-        return when (type) {
-            SimpleNotaryService.type -> SimpleNotaryService(services, myNotaryIdentity!!.owningKey)
-            ValidatingNotaryService.type -> ValidatingNotaryService(services, myNotaryIdentity!!.owningKey)
-            RaftNonValidatingNotaryService.type -> RaftNonValidatingNotaryService(services, myNotaryIdentity!!.owningKey)
-            RaftValidatingNotaryService.type -> RaftValidatingNotaryService(services, myNotaryIdentity!!.owningKey)
-            BFTNonValidatingNotaryService.type -> BFTNonValidatingNotaryService(services, myNotaryIdentity!!.owningKey)
-            else -> null
+    private fun makeCoreNotaryService(notaryConfig: NotaryConfig): NotaryService {
+        val notaryKey = myNotaryIdentity?.owningKey ?: throw IllegalArgumentException("No notary identity initialized when creating a notary service")
+        return if (notaryConfig.validating) {
+            if (notaryConfig.raft != null) {
+                RaftValidatingNotaryService(services, notaryKey, notaryConfig.raft)
+            } else if (notaryConfig.bftSMaRt != null) {
+                throw IllegalArgumentException("Validating BFTSMaRt notary not supported")
+            } else {
+                ValidatingNotaryService(services, notaryKey)
+            }
+        } else {
+            if (notaryConfig.raft != null) {
+                RaftNonValidatingNotaryService(services, notaryKey, notaryConfig.raft)
+            } else if (notaryConfig.bftSMaRt != null) {
+                val cluster = makeBFTCluster(notaryKey, notaryConfig.bftSMaRt)
+                BFTNonValidatingNotaryService(services, notaryKey, notaryConfig.bftSMaRt, cluster)
+            } else {
+                SimpleNotaryService(services, notaryKey)
+            }
+        }
+    }
+
+    protected open fun makeBFTCluster(notaryKey: PublicKey, bftSMaRtConfig: BFTSMaRtConfiguration): BFTSMaRt.Cluster {
+        return object : BFTSMaRt.Cluster {
+            override fun waitUntilAllReplicasHaveInitialized() {
+                log.warn("A BFT replica may still be initializing, in which case the upcoming consensus change may cause it to spin.")
+            }
         }
     }
 
@@ -637,21 +640,13 @@ abstract class AbstractNode(open val configuration: NodeConfiguration,
 
     protected abstract fun startMessagingService(rpcOps: RPCOps)
 
-    private fun obtainIdentity(serviceInfo: ServiceInfo? = null): PartyAndCertificate {
+    private fun obtainIdentity(id: String, name: CordaX500Name): PartyAndCertificate {
         // Load the private identity key, creating it if necessary. The identity key is a long term well known key that
         // is distributed to other peers and we use it (or a key signed by it) when we need to do something
         // "permissioned". The identity file is what gets distributed and contains the node's legal name along with
         // the public key. Obviously in a real system this would need to be a certificate chain of some kind to ensure
         // the legal name is actually validated in some way.
         val keyStore = KeyStoreWrapper(configuration.nodeKeystore, configuration.keyStorePassword)
-
-        val (id, name) = if (serviceInfo == null) {
-            // Create node identity if service info = null
-            Pair("identity", myLegalName)
-        } else {
-            val name = serviceInfo.name ?: myLegalName.copy(commonName = serviceInfo.type.id)
-            Pair(serviceInfo.type.id, name)
-        }
 
         // TODO: Integrate with Key management service?
         val privateKeyAlias = "$id-private-key"
@@ -672,7 +667,7 @@ abstract class AbstractNode(open val configuration: NodeConfiguration,
             // We have to create the certificate chain for the composite key manually, this is because we don't have a keystore
             // provider that understand compositeKey-privateKey combo. The cert chain is created using the composite key certificate +
             // the tail of the private key certificates, as they are both signed by the same certificate chain.
-            Lists.asList(certificate, keyStore.getCertificateChain(privateKeyAlias).drop(1).toTypedArray())
+            listOf(certificate) + keyStore.getCertificateChain(privateKeyAlias).drop(1)
         } else {
             keyStore.getCertificateChain(privateKeyAlias).let {
                 check(it[0].toX509CertHolder() == x509Cert) { "Certificates from key store do not line up!" }
