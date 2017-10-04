@@ -16,6 +16,7 @@ import net.corda.core.crypto.TransactionSignature
 import net.corda.core.identity.Party
 import net.corda.core.internal.uncheckedCast
 import net.corda.core.serialization.SerializationContext
+import net.corda.core.serialization.SerializationContext.UseCase.*
 import net.corda.core.serialization.SerializeAsTokenContext
 import net.corda.core.serialization.SerializedBytes
 import net.corda.core.toFuture
@@ -285,10 +286,17 @@ object SignedTransactionSerializer : Serializer<SignedTransaction>() {
     }
 }
 
+sealed class UseCaseSerializer<T>(private val allowedUseCases: EnumSet<SerializationContext.UseCase>) : Serializer<T>() {
+    protected fun checkUseCase() {
+        checkUseCase(allowedUseCases)
+    }
+}
+
 /** For serialising an ed25519 private key */
 @ThreadSafe
-object Ed25519PrivateKeySerializer : Serializer<EdDSAPrivateKey>() {
+object Ed25519PrivateKeySerializer : UseCaseSerializer<EdDSAPrivateKey>(EnumSet.of(Storage, Checkpoint)) {
     override fun write(kryo: Kryo, output: Output, obj: EdDSAPrivateKey) {
+        checkUseCase()
         check(obj.params == Crypto.EDDSA_ED25519_SHA512.algSpec)
         output.writeBytesWithLength(obj.seed)
     }
@@ -346,8 +354,9 @@ object CompositeKeySerializer : Serializer<CompositeKey>() {
 }
 
 @ThreadSafe
-object PrivateKeySerializer : Serializer<PrivateKey>() {
+object PrivateKeySerializer : UseCaseSerializer<PrivateKey>(EnumSet.of(Storage, Checkpoint)) {
     override fun write(kryo: Kryo, output: Output, obj: PrivateKey) {
+        checkUseCase()
         output.writeBytesWithLength(obj.encoded)
     }
 
